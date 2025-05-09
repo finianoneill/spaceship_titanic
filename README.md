@@ -39,8 +39,8 @@ To download the competition data using the Kaggle CLI:
 
 ```bash
 # Make sure you have your Kaggle API credentials set up in ~/.kaggle/kaggle.json
-kaggle competitions download -c predict-podcast-listening-time
-unzip predict-podcast-listening-time.zip -d data/
+kaggle competitions download -c spaceship-titanic
+unzip spaceship-titanic.zip -d data/
 ```
 
 ## Project Structure
