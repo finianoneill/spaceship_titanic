@@ -136,3 +136,17 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## Acknowledgements
 
 - Kaggle for the competition, dataset and platform
+
+## Citation
+
+Addison Howard, Ashley Chow, and Ryan Holbrook. *Spaceship Titanic*. Kaggle, 2022. https://www.kaggle.com/competitions/spaceship-titanic
+
+```bibtex
+@misc{spaceship-titanic,
+    author = {Addison Howard and Ashley Chow and Ryan Holbrook},
+    title = {Spaceship Titanic},
+    year = {2022},
+    howpublished = {\url{https://www.kaggle.com/competitions/spaceship-titanic}},
+    note = {Kaggle}
+}
+```
