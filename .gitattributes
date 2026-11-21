@@ -1,0 +1,6 @@
+*.ipynb filter=nbstripout
+*.zpln filter=nbstripout
+*.ipynb diff=ipynb
+
+# Keep outputs for the EDA report notebook
+eda.ipynb filter= diff=

@@ -14,7 +14,9 @@ scikit-learn==1.6.1
 xgboost==3.0.0
 lightgbm==4.6.0
 catboost==1.2.8
+optuna==5.1.0
 
 # Tooling
 jupyter==1.1.1
+nbstripout>=0.8
 kaggle>=2.2.5

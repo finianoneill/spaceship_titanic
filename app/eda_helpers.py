@@ -105,25 +105,14 @@ def missingness_vs_target(df, target_var=TARGET):
 # ---------------------------------------------------------------------------
 # Feature engineering
 # ---------------------------------------------------------------------------
-def feature_engineering(df):
-    """Derive features from every raw column.
+def parse_raw_columns(df):
+    """Split the composite raw columns into their parts (no imputation).
 
-    - PassengerId -> group features; Cabin -> deck/num/side; Name -> family
-    - Age -> age bands; spending -> totals, luxury/basic split, log1p
-    - HomePlanet/CryoSleep/Destination/VIP are already clean categoricals:
-      they get nullable 0/1 flags and the interactions the EDA flagged.
-      One-hot/target encoding is left to the modeling pipeline.
-
-    Intended to be run on the combined train + test frame.
+    PassengerId -> group features; Cabin -> deck/num/side; Name -> family.
+    Intended to be run on the combined train + test frame so group/family
+    counts see every passenger.
     """
     out = df.copy()
-
-    # Boolean categoricals -> nullable 0/1 (missing stays missing for imputation)
-    for col in ['CryoSleep', 'VIP']:
-        out[f'{col}_int'] = out[col].map({True: 1, False: 0}).astype('Int64')
-
-    # HomePlanet x Destination route (transported rate ranges 39%-74% across routes)
-    out['Route'] = out['HomePlanet'] + '->' + out['Destination']
 
     # PassengerId -> gggg_pp (group id, position within group)
     pid = out['PassengerId'].str.split('_', expand=True)
@@ -138,15 +127,33 @@ def feature_engineering(df):
     out['Cabin_num'] = pd.to_numeric(cabin[1])
     out['Side'] = cabin[2]
     out['Cabin_missing'] = out['Cabin'].isnull().astype(int)
-    out['Deck_Side'] = out['Deck'] + '/' + out['Side']
-    out['CabinRegion'] = pd.cut(
-        out['Cabin_num'], bins=[-1, 300, 600, 900, 1200, 1500, 2000],
-        labels=['0-300', '300-600', '600-900', '900-1200', '1200-1500', '1500+'])
 
     # Name -> family
     names = out['Name'].str.split(' ', n=1, expand=True)
     out['LastName'] = names[1]
     out['FamilySize'] = out.groupby('LastName')['PassengerId'].transform('count')
+    return out
+
+
+def add_derived_features(df):
+    """Features computed from the (parsed, optionally imputed) base columns.
+
+    Re-run this after imputation so the derived columns reflect filled values.
+    """
+    out = df.copy()
+
+    # Boolean categoricals -> nullable 0/1 (missing stays missing for imputation)
+    for col in ['CryoSleep', 'VIP']:
+        out[f'{col}_int'] = out[col].map({True: 1, False: 0}).astype('Int64')
+
+    # HomePlanet x Destination route (transported rate ranges 39%-74% across routes)
+    out['Route'] = out['HomePlanet'] + '->' + out['Destination']
+
+    # Cabin interactions / bands
+    out['Deck_Side'] = out['Deck'] + '/' + out['Side']
+    out['CabinRegion'] = pd.cut(
+        out['Cabin_num'], bins=[-1, 300, 600, 900, 1200, 1500, 2000],
+        labels=['0-300', '300-600', '600-900', '900-1200', '1200-1500', '1500+'])
 
     # Age bands (children <13 never spend)
     out['AgeGroup'] = pd.cut(
@@ -163,13 +170,26 @@ def feature_engineering(df):
     # Share of spend going to luxury amenities. Non-spenders get 0 (no luxury
     # spend); both they and basic-only spenders are mostly transported.
     out['LuxuryShare'] = (out['LuxurySpending'] / out['TotalSpending']).fillna(0)
-
-    # CryoSleep x Deck: sleepers on A-D/F are ~99% transported, on E/G ~65%
-    out['CryoSleep_Deck'] = out['CryoSleep'].map({True: 'Cryo', False: 'Awake'}) + '/' + out['Deck']
     for col in SPEND_COLS + ['TotalSpending', 'LuxurySpending', 'BasicSpending']:
         out[f'log_{col}'] = np.log1p(out[col])
 
+    # CryoSleep x Deck: sleepers on A-D/F are ~99% transported, on E/G ~65%
+    out['CryoSleep_Deck'] = out['CryoSleep'].map({True: 'Cryo', False: 'Awake'}) + '/' + out['Deck']
     return out
+
+
+def feature_engineering(df):
+    """Parse raw columns and derive every EDA feature (no imputation).
+
+    - PassengerId -> group features; Cabin -> deck/num/side; Name -> family
+    - Age -> age bands; spending -> totals, luxury/basic split, log1p
+    - HomePlanet/CryoSleep/Destination/VIP get nullable 0/1 flags and the
+      interactions the EDA flagged. Encoding is left to the modeling pipeline.
+
+    For modeling, use ``app.preprocessing.preprocess`` which imputes between
+    the two steps.
+    """
+    return add_derived_features(parse_raw_columns(df))
 
 
 # ---------------------------------------------------------------------------
