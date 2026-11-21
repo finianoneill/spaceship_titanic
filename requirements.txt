@@ -17,4 +17,5 @@ catboost==1.2.8
 
 # Tooling
 jupyter==1.1.1
+nbstripout>=0.8
 kaggle>=2.2.5

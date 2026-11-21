@@ -1,5 +1,7 @@
 # Project specific
 data/
+submissions/
+catboost_info/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
