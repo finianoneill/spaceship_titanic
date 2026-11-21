@@ -25,12 +25,15 @@ TBD
 git clone https://github.com/finianoneill/spaceship_titanic.git
 cd spaceship_titanic
 
-# Create and activate a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Create and activate a conda environment
+conda create -n spaceship-titanic python=3.12
+conda activate spaceship-titanic
 
 # Install dependencies
 pip install -r requirements.txt
+
+# macOS only: XGBoost/LightGBM need the OpenMP runtime
+conda install -c conda-forge llvm-openmp
 ```
 
 ### Kaggle CLI Commands
@@ -38,9 +41,9 @@ pip install -r requirements.txt
 To download the competition data using the Kaggle CLI:
 
 ```bash
-# Make sure you have your Kaggle API credentials set up in ~/.kaggle/kaggle.json
-kaggle competitions download -c predict-podcast-listening-time
-unzip predict-podcast-listening-time.zip -d data/
+# Make sure you have your Kaggle API token saved in ~/.kaggle/access_token (or legacy ~/.kaggle/kaggle.json)
+kaggle competitions download -c spaceship-titanic
+unzip spaceship-titanic.zip -d data/
 ```
 
 ## Project Structure
