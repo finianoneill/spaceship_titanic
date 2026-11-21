@@ -12,8 +12,15 @@ Reusable code lives in `app/`, so the notebooks only record analysis and experim
 
 | Version | Model | CV accuracy | Public LB |
 |---|---|---|---|
-| Round 1 | CatBoost, 24 features, default parameters | 0.8164 (1 split) | 0.80266 |
-| Round 2 | *in progress*: imputation and neighbor-feature ablations, LightGBM/XGBoost ensemble, Optuna | – | – |
+| Round 1 | CatBoost, 24 features, default parameters | 0.8164 (1 split); **0.8169 ± 0.0012** (5 seeds) | 0.80266 |
+| Round 2 | Best: CatBoost + XGBoost ensemble | 0.8174 (5 seeds, +0.05 pts) | not submitted |
+| Round 3 | Best: unchanged (group features, neighborhood features, pseudo-labels all rejected) | 0.8169 (5 seeds, ±0.00) | not submitted |
+
+**Rounds 2–3 confirmed a plateau at about 0.817 grouped-CV accuracy.** Nothing beat round 1 by the +0.3-point bar for submitting:
+- **Round 2 (more modeling):** spending-fill variants, a cabin-neighbor target feature, LightGBM/XGBoost ensembles, and Optuna. The boosting models' predictions correlate at 0.98–0.99, and tuning overfit its own split.
+- **Round 3 (new information):** group features, cabin-neighborhood features, and pseudo-labeling. The group signals are already captured by existing features, and pseudo-labels only reinforce cases the model already gets right.
+
+The final model is the round-1 CatBoost. Details are in sections 18 and 22 of `model.ipynb`.
 
 **Leaderboard context:** the public board is very compressed. About 500 of roughly 2,200 teams sit between 0.800 and 0.805, ≥ 0.81 is the top ~11%, and ≥ 0.82 the top ~5%. The public score's standard error is about ±0.8 points, so decisions in this repo are made on CV, not leaderboard rank. The few scores above 0.93 are far beyond what the label noise allows and aren't treated as reachable benchmarks.
 
@@ -82,7 +89,7 @@ Or run a notebook from start to finish without opening it:
 jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=3600 model.ipynb
 ```
 
-`model.ipynb` takes roughly 25 minutes on a laptop, mostly the multi-seed CatBoost runs and Optuna.
+`model.ipynb` takes about 50 minutes on a laptop (all three rounds), mostly the multi-seed CatBoost runs, Optuna and pseudo-labeling.
 
 ## Data processing
 

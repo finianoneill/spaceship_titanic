@@ -283,3 +283,25 @@ def fit_full_predict(fit_predict_factories, X, y, X_test, seeds=EVAL_SEEDS):
     for factory in fit_predict_factories:
         probas.append(np.mean([factory(s)(X, y, X_test) for s in seeds], axis=0))
     return np.mean(probas, axis=0)
+
+
+# --- Pseudo-labelling (fold-aware) -----------------------------------------
+def with_pseudo_labels(base_fit_predict, X_pool, hi=0.95, lo=0.05):
+    """Two-pass self-training.
+
+    Pass 1 fits on the training fold and predicts the unlabelled pool (the test
+    set). Confident pool rows (proba >= hi or <= lo) are added with hard labels,
+    then pass 2 refits and predicts the validation fold. Validation labels are
+    never used; the pool never overlaps validation rows.
+    """
+    def fit_predict(X_tr, y_tr, X_va):
+        p_pool = base_fit_predict(X_tr, y_tr, X_pool)
+        conf = (p_pool >= hi) | (p_pool <= lo)
+        X_aug = pd.concat([X_tr, X_pool[conf]], ignore_index=True)
+        y_aug = pd.concat([pd.Series(np.asarray(y_tr)),
+                           pd.Series((p_pool[conf] >= hi).astype(int))], ignore_index=True)
+        fit_predict.n_pseudo.append(int(conf.sum()))
+        fit_predict.pseudo_rate.append(float((p_pool[conf] >= hi).mean()) if conf.any() else np.nan)
+        return base_fit_predict(X_aug, y_aug, X_va)
+    fit_predict.n_pseudo, fit_predict.pseudo_rate = [], []
+    return fit_predict

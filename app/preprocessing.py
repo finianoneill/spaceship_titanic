@@ -192,3 +192,54 @@ def split_xy(full, features=FEATURES):
             tr['GroupId'].reset_index(drop=True),
             te[features].reset_index(drop=True),
             te['PassengerId'].reset_index(drop=True))
+
+
+# ---------------------------------------------------------------------------
+# Round 3: group-level and cabin-neighbourhood features (no target used)
+# ---------------------------------------------------------------------------
+GROUP_FEATURES = [
+    'Grp_CryoShare', 'Grp_LogSpendMean', 'Grp_LuxuryShareMean', 'Grp_HasChild',
+    'Grp_NumCabins', 'Grp_SameCabin', 'Grp_SameLastName', 'Grp_AgeGap', 'IsChild',
+]
+NEIGHBORHOOD_FEATURES = ['Cabin_Occupancy', 'Nbr_CryoShare']
+
+
+def _others_mean(df, key, col):
+    """Mean of ``col`` over the *other* rows sharing ``key`` (NaN if none)."""
+    g = df.groupby(key)[col]
+    s, n = g.transform('sum'), g.transform('count')
+    return ((s - df[col]) / (n - 1)).where(n > 1)
+
+
+def add_group_features(full, nbr_k=10, nbr_prior=5.0):
+    """Features describing each passenger's groupmates and cabin neighbours.
+
+    Run on the imputed, derived train + test frame (output of ``preprocess``).
+    Uses no labels, so combining train and test is legitimate.
+    """
+    from app.modeling import neighbor_rate  # local import avoids a cycle
+
+    df = full.copy()
+    df['IsChild'] = (df['Age'] < 13).astype(int)
+    # Cabin identity only where it is real: the raw Cabin, or the groupmate-modal
+    # cabin (rule 4). Median-filled cabin numbers are not real cabins.
+    from_group = df['Cabin'].isnull() & df['GroupId'].isin(df.loc[df['Cabin'].notnull(), 'GroupId'])
+    key = df['Deck'] + '/' + df['Cabin_num'].astype(int).astype(str) + '/' + df['Side']
+    df['CabinKey'] = key.where(df['Cabin'].notnull() | from_group)
+
+    df['Grp_CryoShare'] = _others_mean(df, 'GroupId', 'CryoSleep_int')
+    df['Grp_LogSpendMean'] = _others_mean(df, 'GroupId', 'log_TotalSpending')
+    df['Grp_LuxuryShareMean'] = _others_mean(df, 'GroupId', 'LuxuryShare')
+    df['Grp_AgeGap'] = df['Age'] - _others_mean(df, 'GroupId', 'Age')
+    kids = df.groupby('GroupId')['IsChild'].transform('sum') - df['IsChild']
+    df['Grp_HasChild'] = (kids > 0).astype(int)
+    df['Grp_NumCabins'] = df.groupby('GroupId')['CabinKey'].transform('nunique')
+    df['Grp_SameCabin'] = (df.groupby(['GroupId', 'CabinKey'])['PassengerId']
+                             .transform('count') - 1)  # NaN where the cabin is unknown
+    same_ln = df.groupby(['GroupId', 'LastName'])['PassengerId'].transform('count') - 1
+    df['Grp_SameLastName'] = same_ln.fillna(0).astype(int)
+
+    df['Cabin_Occupancy'] = df.groupby('CabinKey')['PassengerId'].transform('count')
+    df['Nbr_CryoShare'] = neighbor_rate(df, df, df['CryoSleep_int'], k=nbr_k, prior=nbr_prior,
+                                        exclude_own_group=True)
+    return df.drop(columns='CabinKey')
