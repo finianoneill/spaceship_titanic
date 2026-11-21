@@ -93,10 +93,14 @@ def apply_imputation_rules(df, log=None):
     return df, log
 
 
-def fill_remaining(df, log=None):
+def fill_remaining(df, log=None, spend_fill='median'):
     """Statistical fallback for whatever the rules could not fill.
 
     Statistics come from train rows only (``Dataset == 'train'``).
+
+    ``spend_fill`` controls the spending columns left after the rules:
+    'median' (awake-adult median by HomePlanet), 'zero', or 'nan' (leave
+    missing; only for models that handle NaN natively, e.g. CatBoost).
     """
     df = df.copy()
     log = [] if log is None else log
@@ -121,15 +125,22 @@ def fill_remaining(df, log=None):
     df.loc[m, 'Age'] = df.loc[m, 'HomePlanet'].map(med)
     _log(log, 'Age: median by HomePlanet', m.sum())
 
-    # Spending (only awake adults are left): median of awake adults by HomePlanet
-    awake_adults = tr[(tr['CryoSleep'] == False) & (tr['Age'] >= 13)]  # noqa: E712
-    n = 0
-    for col in SPEND_COLS:
-        med = awake_adults.groupby('HomePlanet')[col].median()
-        m = df[col].isnull()
-        df.loc[m, col] = df.loc[m, 'HomePlanet'].map(med)
-        n += m.sum()
-    _log(log, 'Spend: awake-adult median by HomePlanet', n)
+    # Spending (only awake adults are left)
+    n = int(df[SPEND_COLS].isnull().sum().sum())
+    if spend_fill == 'median':
+        awake_adults = tr[(tr['CryoSleep'] == False) & (tr['Age'] >= 13)]  # noqa: E712
+        for col in SPEND_COLS:
+            med = awake_adults.groupby('HomePlanet')[col].median()
+            m = df[col].isnull()
+            df.loc[m, col] = df.loc[m, 'HomePlanet'].map(med)
+        _log(log, 'Spend: awake-adult median by HomePlanet', n)
+    elif spend_fill == 'zero':
+        df[SPEND_COLS] = df[SPEND_COLS].fillna(0)
+        _log(log, 'Spend: 0', n)
+    elif spend_fill == 'nan':
+        _log(log, 'Spend: left as NaN (aggregates use known values)', 0)
+    else:
+        raise ValueError(f'Unknown spend_fill: {spend_fill}')
 
     # Cabin_num: median within deck
     med = tr.groupby('Deck')['Cabin_num'].median()
@@ -140,7 +151,7 @@ def fill_remaining(df, log=None):
     return df, log
 
 
-def preprocess(train_df, test_df, verbose=True):
+def preprocess(train_df, test_df, spend_fill='median', verbose=True):
     """Full pipeline. Returns (full_df, imputation_log_df).
 
     ``full_df`` has every row from train and test (``Dataset`` marks which),
@@ -148,7 +159,7 @@ def preprocess(train_df, test_df, verbose=True):
     """
     full = parse_raw_columns(combine_train_test(train_df, test_df))
     full, log = apply_imputation_rules(full)
-    full, log = fill_remaining(full, log)
+    full, log = fill_remaining(full, log, spend_fill=spend_fill)
     full = add_derived_features(full)
     full['CryoSleep_int'] = full['CryoSleep_int'].astype(int)
     full['VIP_int'] = full['VIP_int'].astype(int)
@@ -157,16 +168,23 @@ def preprocess(train_df, test_df, verbose=True):
     full.loc[is_train, TARGET] = full.loc[is_train, TARGET].astype(int)
 
     remaining = full[FEATURES].isnull().sum()
+    if spend_fill == 'nan':
+        remaining = remaining.drop([f'log_{c}' for c in SPEND_COLS])
     assert remaining.sum() == 0, f'Missing values left in features:\n{remaining[remaining > 0]}'
 
     log_df = pd.DataFrame(log)
     if verbose:
-        print(f'Imputed {log_df["Filled"].sum()} values; no missing values left in FEATURES.')
+        print(f'[spend_fill={spend_fill}] Imputed {log_df["Filled"].sum()} values; '
+              f'no unexpected missing values in FEATURES.')
     return full, log_df
 
 
 def split_xy(full, features=FEATURES):
-    """Return X_train, y_train, groups, X_test, test_ids."""
+    """Return X_train, y_train, groups, X_test, test_ids.
+
+    Pass ``features + ['GroupId']`` when a fold-aware feature (e.g. the cabin
+    neighbour rate) needs the group id; the model wrapper drops it.
+    """
     tr = full[full['Dataset'] == 'train']
     te = full[full['Dataset'] == 'test']
     return (tr[features].reset_index(drop=True),
