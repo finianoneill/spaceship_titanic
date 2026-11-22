@@ -15,12 +15,17 @@ Reusable code lives in `app/`, so the notebooks only record analysis and experim
 | Round 1 | CatBoost, 24 features, default parameters | 0.8164 (1 split); **0.8169 ± 0.0012** (5 seeds) | 0.80266 |
 | Round 2 | Best: CatBoost + XGBoost ensemble | 0.8174 (5 seeds, +0.05 pts) | not submitted |
 | Round 3 | Best: unchanged (group features, neighborhood features, pseudo-labels all rejected) | 0.8169 (5 seeds, ±0.00) | not submitted |
+| **Round 4** | **TabPFN v3.5 foundation model, 24 features** | **0.8193 ± 0.0015** (5 seeds, +0.24 pts, better on 5/5) | **0.81458** (rank ~126) |
 
 **Rounds 2–3 confirmed a plateau at about 0.817 grouped-CV accuracy.** Nothing beat round 1 by the +0.3-point bar for submitting:
 - **Round 2 (more modeling):** spending-fill variants, a cabin-neighbor target feature, LightGBM/XGBoost ensembles, and Optuna. The boosting models' predictions correlate at 0.98–0.99, and tuning overfit its own split.
 - **Round 3 (new information):** group features, cabin-neighborhood features, and pseudo-labeling. The group signals are already captured by existing features, and pseudo-labels only reinforce cases the model already gets right.
 
-The final model is the round-1 CatBoost. Details are in sections 18 and 22 of `model.ipynb`.
+**Round 4 (a foundation model):** [TabPFN](https://github.com/PriorLabs/TabPFN) v3.5, a transformer pretrained on synthetic tabular data, is the first model to beat CatBoost on every paired seed. The gain (+0.24 points) is just under the submission bar, but TabPFN is submitted as a documented exception because the gain is consistent. Blending it with CatBoost (predictions correlate 0.98) and fine-tuning it (seed-0 pilot: +0.08 points, correlation 0.999 with the frozen model) both failed to add anything. A different model family landing at the same place is further evidence that about 0.82 is this data's ceiling.
+
+On the public leaderboard it scored **0.81458**, up from 0.80266 (+1.19 points, from rank ~1,060 to ~126). The two submissions disagree on 265 test passengers, and TabPFN is right on 158 of them versus 107 for CatBoost (sign test z ≈ 3.1), so the gain is unlikely to be luck. The gap between CV and the leaderboard also shrank from 1.4 to 0.5 points.
+
+The final model is TabPFN v3.5. Details are in sections 18, 22 and 26 of `model.ipynb`.
 
 **Leaderboard context:** the public board is very compressed. About 500 of roughly 2,200 teams sit between 0.800 and 0.805, ≥ 0.81 is the top ~11%, and ≥ 0.82 the top ~5%. The public score's standard error is about ±0.8 points, so decisions in this repo are made on CV, not leaderboard rank. The few scores above 0.93 are far beyond what the label noise allows and aren't treated as reachable benchmarks.
 
@@ -41,10 +46,12 @@ See section 15 of `eda.ipynb` for the full list with numbers.
 ├── app/
 │   ├── eda_helpers.py      # EDA plots/analyses + feature engineering (parse_raw_columns, add_derived_features)
 │   ├── preprocessing.py    # imputation rules, statistical fill, feature lists, preprocess()
-│   └── modeling.py         # grouped CV, model factories, neighbor feature, ensembling, Optuna, submissions
+│   ├── modeling.py         # grouped CV, model factories, neighbor feature, ensembling, Optuna, submissions
+│   └── run_tabpfn.py       # TabPFN CV + test predictions in a separate process, cached to artifacts/
 ├── eda.ipynb               # exploratory analysis (outputs committed)
 ├── model.ipynb             # modeling experiments (outputs stripped on commit)
 ├── data/                   # competition data (git-ignored)
+├── artifacts/              # cached TabPFN / CatBoost predictions (git-ignored)
 ├── submissions/            # generated submission CSVs (git-ignored)
 └── requirements.txt
 ```
@@ -68,6 +75,8 @@ conda install -c conda-forge llvm-openmp
 nbstripout --install
 ```
 
+**TabPFN licence:** the TabPFN v3.5 weights are free for non-commercial use (research and evaluation) only. On the first run, TabPFN asks you to accept the licence at Prior Labs (https://ux.priorlabs.ai) and then downloads the weights. Treat the API key it gives you as a secret.
+
 ### Data
 
 You need a Kaggle API token in `~/.kaggle/access_token` (or the legacy `~/.kaggle/kaggle.json`), and you must have joined the competition on Kaggle.
@@ -79,6 +88,16 @@ unzip data/spaceship-titanic.zip -d data
 
 ### Running
 
+First compute the TabPFN predictions that round 4 of `model.ipynb` loads. They run in a separate process because PyTorch's and CatBoost's OpenMP runtimes crash when used in the same process on macOS:
+
+```bash
+python -m app.run_tabpfn --features full                  # ~10 min on an M-series GPU: 5 seeds + test fits
+python -m app.run_tabpfn --features compact --no-test
+python -m app.run_tabpfn --finetune --seeds 0 --no-test   # optional fine-tuning pilot, ~1-2 hours
+```
+
+Then:
+
 ```bash
 jupyter lab   # then run eda.ipynb and model.ipynb top to bottom
 ```
@@ -89,7 +108,7 @@ Or run a notebook from start to finish without opening it:
 jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=3600 model.ipynb
 ```
 
-`model.ipynb` takes about 50 minutes on a laptop (all three rounds), mostly the multi-seed CatBoost runs, Optuna and pseudo-labeling.
+`model.ipynb` takes about 50 minutes on a laptop, mostly the multi-seed CatBoost runs, Optuna and pseudo-labeling. Round 4 only reads cached predictions, so it takes seconds.
 
 ## Data processing
 
@@ -125,7 +144,7 @@ Optional fold-aware feature: **`NeighborRate`**, the smoothed transported rate o
 
 ## Making predictions
 
-`model.ipynb` writes `submissions/<model>_cv<score>.csv`. To submit:
+`model.ipynb` writes `submissions/<model>_cv<score>.csv`. The current best is `submissions/tabpfn_v35_cv0.8193.csv`. To submit:
 
 ```bash
 kaggle competitions submit -c spaceship-titanic -f submissions/<file>.csv -m "<description, CV score>"
@@ -143,6 +162,7 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## Acknowledgements
 
 - Kaggle for the competition, dataset and platform
+- [Prior Labs](https://priorlabs.ai) for TabPFN
 
 ## Citation
 
