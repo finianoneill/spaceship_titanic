@@ -13,6 +13,7 @@ Usage (from the repo root):
     python -m app.run_tabpfn --features full
     python -m app.run_tabpfn --features compact --version v3.5
     python -m app.run_tabpfn --finetune --seeds 0 --no-test   # fine-tuned pilot
+    python -m app.run_tabpfn --test-only --seeds $(seq 5 24)  # extra test fits to average
 
 Output: artifacts/tabpfn_<version>_<features>.npz with
     oofs (n_seeds x n_train), seeds, per_seed, test_proba, features
@@ -49,6 +50,7 @@ def main():
     ap.add_argument('--finetune', action='store_true', help='fine-tuned TabPFN (~4 min/fold on M4)')
     ap.add_argument('--epochs', type=int, default=30)
     ap.add_argument('--no-test', action='store_true', help='skip the full-train test fit')
+    ap.add_argument('--test-only', action='store_true', help='skip CV; only full-train test fits')
     args = ap.parse_args()
     warnings.filterwarnings('ignore')
 
@@ -66,22 +68,24 @@ def main():
                                                   epochs=args.epochs)
         else:
             fp = mdl.tabpfn_fit_predict(cats, version=args.version, random_state=s)
-        res = mdl.cross_validate(fp, X, y, mdl.cv_splits(y, groups, seed=s), verbose=False)
-        oofs.append(res['oof'])
-        per_seed.append(accuracy_score(y, res['oof'] >= 0.5))
+        if not args.test_only:
+            res = mdl.cross_validate(fp, X, y, mdl.cv_splits(y, groups, seed=s), verbose=False)
+            oofs.append(res['oof'])
+            per_seed.append(accuracy_score(y, res['oof'] >= 0.5))
         if not args.no_test:
             test_probas.append(fp(X, y, X_test))  # full-train fit for the submission
-        print(f'seed {s}: OOF acc {per_seed[-1]:.4f}  ({time.time() - t:.0f}s)', flush=True)
+        acc = f'OOF acc {per_seed[-1]:.4f}' if per_seed else 'test fit'
+        print(f'seed {s}: {acc}  ({time.time() - t:.0f}s)', flush=True)
 
     os.makedirs(args.out_dir, exist_ok=True)
-    tag = '_ft' if args.finetune else ''
+    tag = ('_ft' if args.finetune else '') + ('_test' if args.test_only else '')
     seeds_tag = '' if args.seeds == mdl.EVAL_SEEDS else '_s' + '-'.join(map(str, args.seeds))
     path = os.path.join(args.out_dir, f'tabpfn_{args.version}{tag}_{args.features}{seeds_tag}.npz')
     np.savez(path, oofs=np.array(oofs), seeds=np.array(args.seeds), per_seed=np.array(per_seed),
              test_proba=np.mean(test_probas, axis=0) if test_probas else np.array([]),
              features=np.array(feats))
-    print(f'TabPFN {args.version}{tag} [{args.features}]: OOF acc {np.mean(per_seed):.4f} '
-          f'± {np.std(per_seed):.4f} -> {path}')
+    summary = f'OOF acc {np.mean(per_seed):.4f} ± {np.std(per_seed):.4f}' if per_seed else f'{len(test_probas)} test fits'
+    print(f'TabPFN {args.version}{tag} [{args.features}]: {summary} -> {path}')
 
 
 if __name__ == '__main__':
