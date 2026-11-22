@@ -15,6 +15,9 @@ xgboost==3.0.0
 lightgbm==4.6.0
 catboost==1.2.8
 optuna==5.1.0
+# TabPFN foundation model (pulls in torch). v3.5 weights are non-commercial;
+# accept the licence at https://ux.priorlabs.ai before the first run.
+tabpfn==10.2.0
 
 # Tooling
 jupyter==1.1.1

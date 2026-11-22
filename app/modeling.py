@@ -148,6 +148,25 @@ def ensemble_result(results, name, weights=None):
             'per_seed': None, 'mean': None, 'std': None}
 
 
+def load_cached_result(path, name, y=None):
+    """Load OOF predictions cached by ``python -m app.run_tabpfn`` as a multi-seed result.
+
+    TabPFN runs in its own process (its OpenMP runtime clashes with CatBoost's),
+    so the notebook reads its predictions from disk instead of fitting it.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f'{path} not found: run `python -m app.run_tabpfn` (see its docstring) first')
+    d = np.load(path)
+    res = {'name': name, 'seeds': [int(s) for s in d['seeds']], 'oofs': list(d['oofs']),
+           'features': [str(f) for f in d['features']], 'per_seed': d['per_seed'],
+           'mean': float(d['per_seed'].mean()), 'std': float(d['per_seed'].std()),
+           'test_proba': d['test_proba'] if d['test_proba'].size else None}
+    if y is not None:  # re-score against the notebook's labels (checks row order matches)
+        score_result(res, y, verbose=False)
+        assert np.allclose(res['per_seed'], d['per_seed']), 'cached predictions do not match these labels'
+    return res
+
+
 def score_result(result, y, verbose=True):
     """Fill per-seed accuracy for a result built from OOF probabilities."""
     result['per_seed'] = np.array([accuracy_score(y, o >= 0.5) for o in result['oofs']])
@@ -304,4 +323,49 @@ def with_pseudo_labels(base_fit_predict, X_pool, hi=0.95, lo=0.05):
         fit_predict.pseudo_rate.append(float((p_pool[conf] >= hi).mean()) if conf.any() else np.nan)
         return base_fit_predict(X_aug, y_aug, X_va)
     fit_predict.n_pseudo, fit_predict.pseudo_rate = [], []
+    return fit_predict
+
+
+# --- TabPFN (round 4) ------------------------------------------------------
+def tabpfn_fit_predict(categorical, version='v3.5', **params):
+    """TabPFN classifier (in-context learning; no training loop).
+
+    Categoricals are passed as pandas ``category`` dtype, which TabPFN treats as
+    categorical. Weights are gated: accept the licence once (see README).
+    """
+    from tabpfn import TabPFNClassifier
+    from tabpfn.constants import ModelVersion
+    base = dict(random_state=SEED)
+    base.update(params)
+
+    def fit_predict(X_tr, y_tr, X_va):
+        X_tr, X_va = _to_category(X_tr, X_va, categorical)
+        model = TabPFNClassifier.create_default_for_version(ModelVersion(version), **base)
+        model.fit(X_tr, np.asarray(y_tr))
+        return model.predict_proba(X_va)[:, 1]
+    return fit_predict
+
+
+def tabpfn_finetuned_fit_predict(categorical, version='v3.5', device='mps', **params):
+    """Fine-tuned TabPFN: adapts the pretrained weights to this dataset.
+
+    Early stopping uses an inner split of the *training* fold
+    (``validation_split_ratio``), never the fold being scored.
+    """
+    from tabpfn.constants import ModelVersion
+    from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
+    # Speed settings for a single Apple-silicon GPU (the job is GPU-bound, ~99% utilisation):
+    # no activation checkpointing (it re-runs the forward pass; 48 GB unified memory is plenty),
+    # validate every 2nd epoch, early-stopping patience 4 (default 8), no checkpoint files.
+    base = dict(epochs=30, learning_rate=1e-5, validation_split_ratio=0.1, early_stopping=True,
+                random_state=SEED, eval_metric='log_loss', use_activation_checkpointing=False,
+                validation_frequency=2, early_stopping_patience=4, save_checkpoint_interval=None)
+    base.update(params)
+
+    def fit_predict(X_tr, y_tr, X_va):
+        X_tr, X_va = _to_category(X_tr, X_va, categorical)
+        model = FinetunedTabPFNClassifier(device=device, model_version=ModelVersion(version), **base)
+        model.fit(X_tr, np.asarray(y_tr))
+        fit_predict.last_model = model
+        return model.predict_proba(X_va)[:, 1]
     return fit_predict
