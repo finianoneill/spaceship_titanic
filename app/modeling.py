@@ -4,7 +4,9 @@ Cross-validation, model factories and submission helpers.
 Every model is wrapped as ``fit_predict(X_train, y_train, X_valid) -> proba`` so
 the same CV loop, out-of-fold predictions and ensembling work for all of them.
 """
+import hashlib
 import os
+import pickle
 import warnings
 
 import numpy as np
@@ -19,6 +21,42 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 SEED = 42
 N_SPLITS = 5
 
+# --- Result cache --------------------------------------------------------------
+# cross_validate() results are cached on disk, keyed by the model's spec (factory
+# + parameters), the exact data (X, y), the splits and the threshold. Re-running
+# a finished experiment then takes milliseconds; changing any parameter, feature
+# or row recomputes it automatically. Set RECOMPUTE = True to ignore the cache,
+# or bump CACHE_VERSION after changing model *code* (specs only see parameters).
+CACHE_DIR = 'artifacts/cv_cache'
+CACHE_VERSION = 1
+RECOMPUTE = False
+_CACHE_STATS = {'hits': 0, 'misses': 0}
+
+
+def fingerprint(*objs):
+    """Stable hash of data frames, arrays and plain values."""
+    h = hashlib.sha1()
+    def feed(o):
+        if isinstance(o, pd.DataFrame):
+            h.update(str(list(o.columns)).encode()); h.update(str(list(o.dtypes)).encode())
+            h.update(pd.util.hash_pandas_object(o, index=True).values.tobytes())
+        elif isinstance(o, pd.Series):
+            h.update(str(o.dtype).encode()); h.update(pd.util.hash_pandas_object(o, index=True).values.tobytes())
+        elif isinstance(o, np.ndarray):
+            h.update(str(o.dtype).encode()); h.update(np.ascontiguousarray(o).tobytes())
+        elif isinstance(o, (list, tuple)):
+            h.update(b'['); [feed(x) for x in o]; h.update(b']')
+        else:
+            h.update(repr(o).encode())
+        h.update(b'|')
+    for o in objs:
+        feed(o)
+    return h.hexdigest()
+
+
+def cache_stats():
+    return dict(_CACHE_STATS)
+
 
 def cv_splits(y, groups, n_splits=N_SPLITS, seed=SEED):
     """Fixed StratifiedGroupKFold splits (groupmates never straddle a split)."""
@@ -27,7 +65,39 @@ def cv_splits(y, groups, n_splits=N_SPLITS, seed=SEED):
 
 
 def cross_validate(fit_predict, X, y, splits, name='model', threshold=0.5, verbose=True):
-    """Run CV. Returns dict with fold accuracies, mean/std and OOF probabilities."""
+    """Run CV. Returns dict with fold accuracies, mean/std and OOF probabilities.
+
+    Cached on disk when ``fit_predict`` has a ``spec`` (see CACHE_DIR above).
+    """
+    spec = getattr(fit_predict, 'spec', None)
+    path = None
+    if spec is not None:
+        key = fingerprint(CACHE_VERSION, spec, X, y, [np.asarray(i) for sp in splits for i in sp], threshold)
+        path = os.path.join(CACHE_DIR, f'{key}.pkl')
+        if not RECOMPUTE and os.path.exists(path):
+            with open(path, 'rb') as f:
+                res, extras = pickle.load(f)
+            for attr, vals in extras.items():  # e.g. pseudo-label counts
+                getattr(fit_predict, attr).extend(vals)
+            _CACHE_STATS['hits'] += 1
+            res = {**res, 'name': name}
+            if verbose:
+                print(f'{name:<40} CV accuracy {res["cv_mean"]:.4f} ± {res["cv_std"]:.4f}  '
+                      f'folds {np.round(res["folds"], 4)}  (cached)')
+            return res
+        _CACHE_STATS['misses'] += 1
+    extras_before = {a: len(getattr(fit_predict, a)) for a in getattr(fit_predict, 'stat_attrs', ())}
+    res = _cross_validate(fit_predict, X, y, splits, name, threshold, verbose)
+    if path is not None:
+        extras = {a: getattr(fit_predict, a)[n:] for a, n in extras_before.items()}
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(path + '.tmp', 'wb') as f:
+            pickle.dump((res, extras), f)
+        os.replace(path + '.tmp', path)
+    return res
+
+
+def _cross_validate(fit_predict, X, y, splits, name, threshold, verbose):
     oof = np.zeros(len(y))
     scores = []
     for tr_idx, va_idx in splits:
@@ -68,6 +138,7 @@ def logreg_fit_predict(categorical, C=1.0):
             warnings.simplefilter('ignore', RuntimeWarning)
             model.fit(X_tr, y_tr)
             return model.predict_proba(X_va)[:, 1]
+    fit_predict.spec = ('logreg', C, list(categorical))
     return fit_predict
 
 
@@ -84,6 +155,7 @@ def catboost_fit_predict(categorical, **params):
         model.fit(X_tr, y_tr)
         fit_predict.last_model = model
         return model.predict_proba(X_va)[:, 1]
+    fit_predict.spec = ('catboost', sorted(base.items()), list(categorical))
     return fit_predict
 
 
@@ -197,6 +269,7 @@ def lgbm_fit_predict(categorical, **params):
         X_tr, X_va = _to_category(X_tr, X_va, categorical)
         model = LGBMClassifier(**base).fit(X_tr, y_tr)
         return model.predict_proba(X_va)[:, 1]
+    fit_predict.spec = ('lgbm', sorted(base.items()), list(categorical))
     return fit_predict
 
 
@@ -211,6 +284,7 @@ def xgb_fit_predict(categorical, **params):
         X_tr, X_va = _to_category(X_tr, X_va, categorical)
         model = XGBClassifier(**base).fit(X_tr, y_tr)
         return model.predict_proba(X_va)[:, 1]
+    fit_predict.spec = ('xgb', sorted(base.items()), list(categorical))
     return fit_predict
 
 
@@ -264,6 +338,8 @@ def with_neighbor_feature(base_fit_predict, k=10, prior=5.0):
         proba = base_fit_predict(X_tr.drop(columns='GroupId'), y_tr, X_va.drop(columns='GroupId'))
         fit_predict.last_model = getattr(base_fit_predict, 'last_model', None)
         return proba
+    inner = getattr(base_fit_predict, 'spec', None)
+    fit_predict.spec = None if inner is None else ('neighbor', k, prior, inner)
     return fit_predict
 
 
@@ -323,6 +399,9 @@ def with_pseudo_labels(base_fit_predict, X_pool, hi=0.95, lo=0.05):
         fit_predict.pseudo_rate.append(float((p_pool[conf] >= hi).mean()) if conf.any() else np.nan)
         return base_fit_predict(X_aug, y_aug, X_va)
     fit_predict.n_pseudo, fit_predict.pseudo_rate = [], []
+    fit_predict.stat_attrs = ('n_pseudo', 'pseudo_rate')  # restored on a cache hit
+    inner = getattr(base_fit_predict, 'spec', None)
+    fit_predict.spec = None if inner is None else ('pseudo', hi, lo, fingerprint(X_pool), inner)
     return fit_predict
 
 

@@ -15,7 +15,7 @@ Reusable code lives in `app/`, so the notebooks only record analysis and experim
 | Round 1 | CatBoost, 24 features, default parameters | 0.8164 (1 split); **0.8169 ± 0.0012** (5 seeds) | 0.80266 |
 | Round 2 | Best: CatBoost + XGBoost ensemble | 0.8174 (5 seeds, +0.05 pts) | not submitted |
 | Round 3 | Best: unchanged (group features, neighborhood features, pseudo-labels all rejected) | 0.8169 (5 seeds, ±0.00) | not submitted |
-| **Round 4** | **TabPFN v3.5 foundation model, 24 features** | **0.8193 ± 0.0015** (5 seeds, +0.24 pts, better on 5/5) | **0.81458** (rank ~126) |
+| **Round 4** | **TabPFN v3.5 foundation model, 24 features** | **0.8193 ± 0.0015** (5 seeds, +0.24 pts, better on 5/5) | 0.81458 (rank ~126); **0.81529** with 25-seed test averaging (rank ~117) |
 
 **Rounds 2–3 confirmed a plateau at about 0.817 grouped-CV accuracy.** Nothing beat round 1 by the +0.3-point bar for submitting:
 - **Round 2 (more modeling):** spending-fill variants, a cabin-neighbor target feature, LightGBM/XGBoost ensembles, and Optuna. The boosting models' predictions correlate at 0.98–0.99, and tuning overfit its own split.
@@ -23,7 +23,7 @@ Reusable code lives in `app/`, so the notebooks only record analysis and experim
 
 **Round 4 (a foundation model):** [TabPFN](https://github.com/PriorLabs/TabPFN) v3.5, a transformer pretrained on synthetic tabular data, is the first model to beat CatBoost on every paired seed. The gain (+0.24 points) is just under the submission bar, but TabPFN is submitted as a documented exception because the gain is consistent. Blending it with CatBoost (predictions correlate 0.98) and fine-tuning it (seed-0 pilot: +0.08 points, correlation 0.999 with the frozen model) both failed to add anything. A different model family landing at the same place is further evidence that about 0.82 is this data's ceiling.
 
-On the public leaderboard it scored **0.81458**, up from 0.80266 (+1.19 points, from rank ~1,060 to ~126). The two submissions disagree on 265 test passengers, and TabPFN is right on 158 of them versus 107 for CatBoost (sign test z ≈ 3.1), so the gain is unlikely to be luck. The gap between CV and the leaderboard also shrank from 1.4 to 0.5 points.
+On the public leaderboard it scored **0.81458**, up from 0.80266 (+1.19 points, from rank ~1,060 to ~126). The two submissions disagree on 265 test passengers, and TabPFN is right on 158 of them versus 107 for CatBoost (sign test z ≈ 3.1), so the gain is unlikely to be luck. The gap between CV and the leaderboard also shrank from 1.4 to 0.5 points. Averaging 25 TabPFN fits for the test predictions (instead of 5) flipped 15 predictions and added 3 net correct, for **0.81529** (rank ~117).
 
 The final model is TabPFN v3.5. Details are in sections 18, 22 and 26 of `model.ipynb`.
 
@@ -108,7 +108,7 @@ Or run a notebook from start to finish without opening it:
 jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=3600 model.ipynb
 ```
 
-`model.ipynb` takes about 50 minutes on a laptop, mostly the multi-seed CatBoost runs, Optuna and pseudo-labeling. Round 4 only reads cached predictions, so it takes seconds.
+The first run of `model.ipynb` takes about 50 minutes on a laptop, mostly the multi-seed CatBoost runs, Optuna and pseudo-labeling. Every cross-validation result is cached in `artifacts/cv_cache/`, keyed by the model's parameters, the exact data and the splits, so later runs only recompute what changed and finish in a few minutes. Set `mdl.RECOMPUTE = True` in the setup cell to rebuild everything. Round 4 only reads cached TabPFN predictions, so it takes seconds.
 
 ## Data processing
 
@@ -144,7 +144,7 @@ Optional fold-aware feature: **`NeighborRate`**, the smoothed transported rate o
 
 ## Making predictions
 
-`model.ipynb` writes `submissions/<model>_cv<score>.csv`. The current best is `submissions/tabpfn_v35_cv0.8193.csv`. To submit:
+`model.ipynb` writes `submissions/<model>_cv<score>.csv`. The current best is `submissions/tabpfn_v35_25seeds_cv0.8193.csv` (0.81529), made by `python -m app.run_tabpfn --test-only --seeds $(seq 5 24)` and averaged with the 5 original test fits. To submit:
 
 ```bash
 kaggle competitions submit -c spaceship-titanic -f submissions/<file>.csv -m "<description, CV score>"
